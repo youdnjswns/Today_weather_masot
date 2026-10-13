@@ -1,0 +1,17 @@
+name: daily-weather
+on:
+  schedule:
+    - cron: "0 23 * * *"   # 한국 시간 아침 8시
+  workflow_dispatch:
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          W=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=37.4837&longitude=127.0324&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FSeoul&forecast_days=1")
+          MAX=$(echo "$W" | jq -r '.daily.temperature_2m_max[0]')
+          MIN=$(echo "$W" | jq -r '.daily.temperature_2m_min[0]')
+          RAIN=$(echo "$W" | jq -r '.daily.precipitation_probability_max[0]')
+          jq -n --arg m "최저 ${MIN}° / 최고 ${MAX}° · 강수확률 ${RAIN}%" \
+            '{topic:"today_weather_masot", title:"☀️ 서초구 오늘의 날씨", message:$m}' \
+            | curl -s -d @- https://ntfy.sh
