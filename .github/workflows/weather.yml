@@ -1,7 +1,7 @@
 name: daily-weather
 on:
   schedule:
-    - cron: "0 23 * * *"   # 한국 시간 아침 8시
+    - cron: "0 23 * * *"
   workflow_dispatch:
 jobs:
   send:
@@ -10,31 +10,24 @@ jobs:
       - name: send
         run: |
           python3 - <<'PY'
-          import json, urllib.request
-
+          import json, urllib.request, itertools
           LAT, LON = 37.4837, 127.0324
           TOPIC = "today_weather_masot"
-
-          def get(url):
-              with urllib.request.urlopen(url, timeout=30) as r:
-                  return json.load(r)
-
-          def grade(v, cuts):
-              names = ["좋음", "보통", "나쁨", "매우나쁨"]
-              for c, n in zip(cuts, names):
-                  if v <= c:
-                      return n
-              return names[-1]
-
-          w = get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
-                  "&daily=temperature_2m_max,temperature_2m_min"
-                  "&hourly=precipitation,snowfall&timezone=Asia%2FSeoul&forecast_days=1")
+          get = lambda url: json.load(urllib.request.urlopen(url, timeout=30))
+          grade = lambda v, cuts: ["좋음", "보통", "나쁨", "매우나쁨"][sum(v > c for c in cuts)]
+          w = get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&daily=temperature_2m_max,temperature_2m_min&hourly=precipitation,snowfall&timezone=Asia%2FSeoul&forecast_days=1")
           tmax = w["daily"]["temperature_2m_max"][0]
           tmin = w["daily"]["temperature_2m_min"][0]
-
-          # 비/눈 시간대
-          kinds = []
-          for p, s in zip(w["hourly"]["precipitation"], w["hourly"]["snowfall"]):
-              if s and s > 0:
-                  kinds.append("눈")
-              elif p and p >= 0.1:
+          kinds = ["눈" if (s or 0) > 0 else "비" if (p or 0) >= 0.1 else "" for p, s in zip(w["hourly"]["precipitation"], w["hourly"]["snowfall"])]
+          groups = [(k, len(list(g))) for k, g in itertools.groupby(kinds)]
+          starts = list(itertools.accumulate([0] + [n for _, n in groups]))
+          segs = [f"{k} {starts[i]}~{starts[i] + n}시" for i, (k, n) in enumerate(groups) if k]
+          rain = ", ".join(segs) or "비·눈 소식 없음"
+          a = get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&hourly=pm10,pm2_5&timezone=Asia%2FSeoul&forecast_days=1")
+          pm10 = max(x for x in a["hourly"]["pm10"] if x is not None)
+          pm25 = max(x for x in a["hourly"]["pm2_5"] if x is not None)
+          dust = f"미세먼지 {pm10:.0f}㎍/㎥ ({grade(pm10, [30, 80, 150])})\n초미세먼지 {pm25:.0f}㎍/㎥ ({grade(pm25, [15, 35, 75])})"
+          msg = f"🌡️ 최저 {tmin:.0f}° / 최고 {tmax:.0f}°\n☔ {rain}\n😷 {dust}"
+          body = json.dumps({"topic": TOPIC, "title": "☀️ 서초구 오늘의 날씨", "message": msg}).encode()
+          urllib.request.urlopen(urllib.request.Request("https://ntfy.sh", data=body, headers={"Content-Type": "application/json"}), timeout=30)
+          PY
